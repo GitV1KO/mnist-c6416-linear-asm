@@ -1,0 +1,15 @@
+{
+  "upstream": "https://github.com/ih8gin/Mnist-on-dsp-chip",
+  "copied_source_sha256": {
+    "reference/main.c": "7e38a444aba94ef22b304d6878d6883c6702350c6fc3564af76bb7f28198c931",
+    "reference/README.md": "a1e952e2b9c5d1937845c15bde55e3ed4d1585f002c6f8706cc1eb43d1c42b9e",
+    "data/conv1_b.txt": "7460d8f0749688bd74e0517f221d72b2fc8970977bd74bb0c4db7b6d7d412f2e",
+    "data/conv1_w.txt": "394b12fcc0057089ba94cc7ecbc733e649f2717e0bf799f8d88f2c75fa3b3ac1",
+    "data/conv2_b.txt": "0fc48b99ddfdfacc273f78626359db6fbecaee88acfc9d929bc65a69b1d55194",
+    "data/conv2_w.txt": "b71e90f01c642dea32ee86b058d43c8026514b802758a039719b7a3f29e374ab",
+    "data/conv3_b.txt": "962ec6325c4ebcd69c64c31c94a6a4e23038af76a79a5c03ce873b556e709954",
+    "data/conv3_w.txt": "0ae6c78fc884f14ca39a21ff4f1ef69bd34b55de4946797d524aa647e5330d07",
+    "data/data.txt": "86562319b04a8834022b28cabd232cf9991741d123a2d331f574e778ecd54b6f",
+    "data/label.txt": "869fc53361688ac97aadebcfb6a1f1163c84f23662bc8d707085c1be6b600516"
+  }
+}

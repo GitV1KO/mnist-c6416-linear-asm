@@ -1,0 +1,7 @@
+Debug/
+Release/
+build/
+*.obj
+*.out
+*.map
+*.asm

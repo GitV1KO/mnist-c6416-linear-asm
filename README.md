@@ -1,149 +1,163 @@
-# Mnist-on-dsp-chip
-在TMS320C6416上实现卷积神经网络进行数字手写体识别<br>
-run CNN on TMS320C6416
+# MNIST CNN on C6416 with Linear Assembly
 
-## 如何使用 How to Use?
-在python上运行Build_Model.py可以实现模型的搭建、训练和参数导出，将模型参数放入conv\data路径下后，使用CCS打开工程，连接到dsp芯片后即可在硬件上运行模型进行预测。<br>
-其中数据集已经通过阈值二值化转成0/1码，Model_test.py文件是用来对C语言实现的模型进行验证。
+在 **TMS320C6416 / C64x DSP** 上运行手写数字识别 CNN，并使用 TI 线性汇编加速第二层卷积中的点积计算。项目用于《嵌入式系统设计与实验》结课实验，已完成真实开发板运行和课程验收。
 
-## 相关研究 Relative Work
+本仓库基于 [ih8gin/Mnist-on-dsp-chip](https://github.com/ih8gin/Mnist-on-dsp-chip) 修改。网络结构、训练好的权重和原始 MNIST 测试数据来自原项目；本次工作主要是裸机推理整理、线性汇编内核优化、CCS 3.1 工程适配及公平的断点计时。没有重新训练模型。
 
-本此实验使用的数据集为MNIST。MNIST 数据集来自美国国家标准与技术研究所, National Institute of Standards and Technology (NIST). 训练集 (training set) 由来自 250 个不同人手写的数字构成, 其中 50% 是高中学生, 50% 来自人口普查局 (the Census Bureau) 的工作人员. 测试集(test set) 也是同样比例的手写数字数据。
-下面展示五种被广泛使用的模型：
+## 环境
 
-### i.	 Baseline Liner Classifier
+- 硬件：TI DSK6416，TMS320C6416 / C64x。
+- 软件：Windows XP、Code Composer Studio 3.1、课程配套 TI C6000 编译工具链。
+- 工程：传统 `.pjt`，`-mv6400`，COFF ABI，裸机运行，不使用 DSP/BIOS 或其他操作系统。
+- 调试：电脑通过 USB 连接板载 JTAG 仿真器，在 CCS 中加载、运行和设置断点。
 
-![pictures/basic%20linear%20classifier.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/f3bd78337ca8c68460ff4926a832c1db3926d06c/pictures/basic%20linear%20classifier.png)
-<br>图1. 线性分类器<br><br>
+DSP 端不需要 Python、TensorFlow、图片解码库或运行时文件系统。权重及默认 20 张测试图像已编入 `conv/cnn_data.h`。
 
-  最简单的线性分类器。每个输入像素值构成每个输出单元的加权和。总和最高的输出单元表示输入字符的类别。因此，我们可以看到，图像被视为一维向量，并连接到一个10输出的向量。测试集acc为92.9%
+## 网络结构
 
-### ii.	One-Hidden-Layer Fully Connected Multilayer NN
+| 层 | 运算 | 输出尺寸 |
+|---|---|---|
+| 输入 | 28×28 二值图像，像素为 0/1 | 28×28×1 |
+| 卷积 1 | 5×5，1→5 通道，ReLU | 24×24×5 |
+| 池化 1 | 2×2 最大池化 | 12×12×5 |
+| 卷积 2 | 5×5，5→10 通道，ReLU | 8×8×10 |
+| 池化 2 | 2×2 最大池化 | 4×4×10 |
+| 分类头 | 全局平均池化、1×1 卷积，10→10 | 10 个分数 |
+| 输出 | argmax | 数字 0～9 |
 
-![pictures/one%20hidden%20layer%20fcnn.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/91b0d074c8b3de39ec9f5142cefe45f3521900eb/pictures/one%20hidden%20layer%20fcnn.png)
-<br>图2. 单层隐藏层的全连接神经网络结构<br><br>
+模型共有 1,500 个参数。推理保持原项目的整数运算方式，包括平均池化中的整数截断。
 
-在输入层和输出层之间增加隐含层，隐含层神经元数量为300个，即20*20→300→10网络，测试集acc为96.3%。将隐含层增加到1000个神经元，即20*20→1000→10网络，测试集acc为95.75%，过于臃肿的中间层导致了模型的过拟合，使其在测试集上的变现反而下降了。
-  
-### iii.	Two-Hidden-Layer Fully Connected Multilayer NN
+## 加速的位置
 
-![pictures/two%20hidden%20layer%20fcnn.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/91b0d074c8b3de39ec9f5142cefe45f3521900eb/pictures/two%20hidden%20layers%20fcnn.png)
-<br>图3. 两层隐藏层的全连接神经网络结构<br><br>
+第二层卷积的每个窗口包含 `5×5×5 = 125` 项数据。程序将窗口和权重整理成连续的 `short` 数组，补 3 个零到 128 项，再调用所选点积内核：
 
-在输入层和输出层之间增加两个隐藏层，，即20*20→300→100→10网络，测试集acc为96.2%。增加隐含层到20*20→1000→150→10网络，测试集错误率为95.3%，与上一案例相同，过于臃肿的中间层导致了模型的过拟合，使其在测试集上的变现反而下降了。
-可以发现，通过增加隐藏层，改善很少。增加某层网络神经元的数量不能有效提升模型的表现。
+```c
+/* 普通 C：计算相同的 128 项 */
+cnn_dotprod128_c(x, w);
 
-### iv.	LeNet-1
+/* TI C64x 线性汇编：实际链接 cnn_dotprod128.sa */
+cnn_dotprod128(x, w);
+```
 
-![pictures/LeNet1.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/91b0d074c8b3de39ec9f5142cefe45f3521900eb/pictures/LeNet1.png)
-<br>图4. LeNet-1网络结构<br><br>
+`.sa` 使用 `LDDW` 加载、`DOTP2` 有符号双 16 位点积和两个独立累加器，循环 32 次，每次处理 4 项。TI Assembly Optimizer 负责寄存器分配与软件流水调度。两版使用相同数据布局和计算量；C 函数也提供真实的对齐信息，没有通过降低 C 版本优化级别来制造加速。
 
-  在Lenet-1中，28*28的输入图像→4个24*24 feature maps卷积层(5*5 ) →平均池化层(2*2）→8个12*12 feature maps 卷积层(5*5) →平均池化层(2*2）→直接全连接后输出
-  引入卷积和池化层后，LeNet-1对测试数据的错误率为1.7%
-  值得注意的是，在作者发明LeNet时，他们使用平均池化层，输出2*2特征图的平均值。目前很多LeNet实现使用max pooling只输出2×2 feature map的最大值，这有助于加快训练速度。当选择最强的特征时，反向传播可以得到较大的梯度。
-  
-### v.	LeNet-4 
+输入需满足源码规定的对齐与数值范围：`x % 32 == 0`、`w % 32 == 16`，且所有乘积绝对值之和不超过 `INT_MAX`。生产代码在初始化和数据整理时检查相关条件。
 
-![pictures/LeNet4.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/91b0d074c8b3de39ec9f5142cefe45f3521900eb/pictures/LeNet4.png)
-<br>图4. LeNet-4网络结构<br><br>
+## 编译和上板
 
-  在Lenet-4中，32*32的输入图像→4个28*28 feature maps卷积层(5*5 ) →平均池化层(2*2）→6个10*10 feature maps 卷积层(5*5) →平均池化层(2*2）→全连接到120个神经元→全连接到10个输出神经元
-  在输出端增加了全连接层，测试集错误率为1.1%
+1. 将仓库复制到 XP 虚拟机中的英文路径，例如 `C:\mnist_c6416`。
+2. 在 CCS 3.1 中打开 `conv\dsp.pjt`，选择课程使用的 DSK6416 调试配置并连接板卡。
+3. 如果 CCS 安装位置不同，将工程中的 include 路径和 `rts6400.lib` 路径改为实际的 C6000 `cgtools` 目录。工程默认路径是 `C:\CCStudio_v3.1\C6000\cgtools`。
+4. 在 `conv/cnn_config.h` 中选择实现，默认启用汇编：
 
-### vi.	LeNet-5
+   ```c
+   #define USE_LINEAR_ASM 1  /* 0 = C，1 = 线性汇编 */
+   ```
 
-![pictures/LeNet5.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/91b0d074c8b3de39ec9f5142cefe45f3521900eb/pictures/LeNet5.png)
-<br>图5. LeNet-5网络结构<br><br>
+5. 选择 **Debug**，执行 **Project → Rebuild All**。
+6. 通过 **Load Program** 加载本次生成的 `conv\Debug\cnn_linear.out`，执行 **Go Main** 后 Run。
 
-  LeNet-5是最受初学者实践时欢迎的
-  在Lenet-5中，32*32的输入图像→6个28*28 feature maps卷积层(5*5 ) →平均池化层(2*2）→16个10*10 feature maps 卷积层(5*5) →平均池化层(2*2）→全连接到120个神经元→全连接到10个输出神经元
-  相比LeNet-4，增加了更多的feature map，测试集acc为98.7%
+Release 配置输出到 `conv\Release\cnn_linear.out`。两次比较必须使用相同配置；下面记录的实测结果来自 Debug，不应与 Release 混比。
 
-## Design
-设计之初，我的目标就在于尽最大可能的精简网络结构，较低运算量，于是选择使用全卷积神经网络（Fully Convolutional NN）有两个隐藏层（一次卷积一次池化）和一个输出头（平均池化+1*1卷积）。<br>
-在输出端使用平均池化降维+预测器（只需要110个参数）代替直接使用全连接预测器（需要410个参数），可以减少参数规模，降低运算量，也可以加速训练时的模型收敛速度。
-模型运算图为28*28输入层→5*24*24（5个5*5卷积核）→5*12*12（最大值池化）→10*8*8（10个5*5卷积核）→10*4*4（最大值池化）→10*1*1（平均值池化）→10输出头。
-模型结构和示意图如下：<br>
- 
-![pictures/%E7%BD%91%E7%BB%9C%E7%BB%93%E6%9E%84.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/cb831740a41b4ea293c0d690ef7bc62a1d40b1e0/pictures/%E7%BD%91%E7%BB%9C%E7%BB%93%E6%9E%84.png)
-<br>图6. 网络结构图<br><br>
+若旧 CCS 将链接器参数拼接成错误路径，在 Linker 设置中分别检查 Map Filename 和 Output Filename，Debug 对应：
 
-![pictures/%E6%A8%A1%E5%9E%8B%E5%8F%82%E6%95%B0%E5%B1%95%E7%A4%BA.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/cb831740a41b4ea293c0d690ef7bc62a1d40b1e0/pictures/%E6%A8%A1%E5%9E%8B%E5%8F%82%E6%95%B0%E5%B1%95%E7%A4%BA.png)
-<br>图7. 模型结构参数详情<br><br>
+```text
+.\Debug\cnn_linear.map
+.\Debug\cnn_linear.out
+```
 
-## Train
+`conv/build_ccs3.bat` 提供命令行构建方式，输出在 `conv/build/`，使用 `-o3`；该方式不等同于下面的 Debug 实测配置。
 
-### i.	loss曲线
-根据上述训练过程，结合tensorflow2内置的Earlystop方法，确定最佳迭代步数为238个epochs，训练过程中loss函数曲线及accuracy曲线如下：
+## 用 CCS Clock 比较 C 和汇编
 
-![pictures/238eps_loss.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/91b0d074c8b3de39ec9f5142cefe45f3521900eb/pictures/238eps_loss.png)
-<br>图8. 238个epochs下的loss函数曲线<br><br>
+打开 `conv/clock_demo.c`，找到 `cnn_clock_demo()`：
 
-![pictures/238eps_acc.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/91b0d074c8b3de39ec9f5142cefe45f3521900eb/pictures/238eps_acc.png)
- <br>图9. 238个epochs下的mAP函数曲线<br><br>
- 
-最终达到测试集上mAP为0.9575<br>
+```c
+#if USE_LINEAR_ASM
+    g_clock_result = cnn_dotprod128(x, w);   /* CLOCK_START_ASM */
+#else
+    g_clock_result = cnn_dotprod128_c(x, w); /* CLOCK_START_C */
+#endif
+    g_clock_done = 1;                       /* CLOCK_STOP */
+```
 
-![pictures/performance.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/8df6f37d4fe6ea499cfa1a9db793827df1c65007/pictures/performance.png)
-<br>图10. 模型在训练集和测试集上的表现<br><br>
+1. 在当前启用的 `CLOCK_START_*` 调用行设置第一个断点，在 `CLOCK_STOP` 行设置第二个断点。
+2. 打开 **Profile → Clock → View** 并启用 Clock。
+3. Run 到第一个断点。此时调用还未执行，将 Clock 清零。
+4. 用 Run 继续到第二个断点，记录 Clock cycles。测量区间内不单步、不打印、不保留内核内部断点。
+5. 将唯一宏从 1 改为 0，或从 0 改为 1；保持同一 Debug 配置，**Rebuild All，重新 Load Program**，重复测量。
+6. 优化后源码行与机器指令不一定一一对应，应在 Disassembly 中确认起点在调用之前、终点在调用返回和结果保存之后。可通过函数符号 `_cnn_dotprod128` 及其 `LDDW`、`DOTP2` 指令确认进入了汇编内核。
 
-### ii.	混淆矩阵 Confusion Matrix
-<br>
-混淆矩阵反应了多分类模型对各个类别的特征学习情况，从中可以查看各种条件概率，从左上到右下的对角线上的概率为各个类别的召回率。从各个条件概率中，可以全面、直观的反应模型的优缺点，能够给研究人员提供明确的改进方向。
+程序先完成 20 张图的推理，然后使用保存的首张图真实卷积窗口做一次独立点积测量。因此到第一个断点时，Console 已出现 20 张图的结果是正常现象。待测点积仍会在两个断点之间重新计算；预热在计时之前，C 对照核对在计时之后。
 
-![pictures/confusion_matrix.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/cb831740a41b4ea293c0d690ef7bc62a1d40b1e0/pictures/confusion_matrix.png)
-<br>图11. 训练238epochs的混淆矩阵<br><br>
+### 本次板卡实测记录
 
-从混淆矩阵可以看出，模型对各个类别的学习情况都很优秀，没有明显的缺点。对错误分类的深入分析在下一节中详细展开说明。
+| 项目 | 普通 C | 线性汇编 |
+|---|---:|---:|
+| 构建配置 | Debug | Debug |
+| 点积长度 | 128 | 128 |
+| CCS Clock 读数 | 92 cycles | 61 cycles |
+| 点积结果 | -3813844 | -3813844 |
 
-## 难例分析 Analysis
-将错误案例全部导出后，经过分析，发现导致模型预测错误的原因主要是由于输入图片可能存在三个方面的问题：字迹不清晰，存在多余的笔划，书写歪斜不正：
+对应加速比为 `92 / 61 ≈ 1.51`，周期数减少约 `33.7%`。这是本次课堂实验记录的一组结果，测量包含所选点积函数调用及结果保存；不是多次测试的平均值，也不是整层卷积或整张 CNN 的加速比。实际数值还会受编译器版本、优化配置、代码布局和缓存状态影响，应在自己的板卡上复测。
 
-![pictures/%E9%83%A8%E5%88%86%E9%9A%BE%E4%BE%8B%E5%B1%95%E7%A4%BA.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/cb831740a41b4ea293c0d690ef7bc62a1d40b1e0/pictures/%E9%83%A8%E5%88%86%E9%9A%BE%E4%BE%8B%E5%B1%95%E7%A4%BA.png)
-<br>图12. 部分难例展示<br><br>
+第二层卷积每张图调用点积 640 次，此外还包含窗口打包、偏置和 ReLU；其整体性能需要另行测量。
 
-### 字迹不清
-有些输入图片中笔划不清，断断续续，这是由于数据集本身的问题，或者是对原始图片进行二值化处理时阈值选择不合理导致的。模型会被不连续的笔划干扰，说明模型输出层单元的感受野不足，不能有效整合全局信息。
+## 正确性和运行结果
 
-![pictures/%E9%9A%BE%E4%BE%8B-%E5%AD%97%E8%BF%B9%E4%B8%8D%E6%B8%85.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/cb831740a41b4ea293c0d690ef7bc62a1d40b1e0/pictures/%E9%9A%BE%E4%BE%8B-%E5%AD%97%E8%BF%B9%E4%B8%8D%E6%B8%85.png)
-<br>图13. 典型字迹不清的难例<br><br>
+本次上板运行的 20 张图中，19 张识别正确，准确率为 95%。Watch 中的完成状态为：
 
-这个问题浅层的模型很难解决，需要加深网络层数增大输出层参数的感受野；或者在模型头部使用传统的全连接输出层取代平均值池化+1*1卷积的卷积输出层，牺牲模型精简程度也能有效改善感受野不足的问题。
-### 多余比划
-有些输入图片中数字的写法很特殊，模型对有个人书写特色的数字体的识别正确率明显低于规范书写体，其中比较典型的几个问题有：
-* 0不闭合
-* 0写成扁平状
-* 1的书写模仿打印体
-* 2的左下不是折线而是重叠的弧线
-* 7在中间多加一条短划线
+```text
+g_cnn_report.samples          = 20
+g_cnn_report.correct          = 19
+g_cnn_report.mismatches       = 0
+g_cnn_report.failures         = 0
+g_cnn_report.assembly_enabled = 1
+g_cnn_done                   = 1
+```
 
-![pictures/%E9%9A%BE%E4%BE%8B-%E4%B9%A6%E5%86%99%E4%B9%A0%E6%83%AF%E5%B7%AE%E5%BC%82.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/cb831740a41b4ea293c0d690ef7bc62a1d40b1e0/pictures/%E9%9A%BE%E4%BE%8B-%E4%B9%A6%E5%86%99%E4%B9%A0%E6%83%AF%E5%B7%AE%E5%BC%82.png)
-<br>图14. 书写习惯差异导致的难例<br><br>
+`mismatches=0` 表示实际分数和独立参考值一致；它与“预测是否符合真实标签”是两项不同检查。第 8 号样本的真实标签为 5，模型预测为 9，因此正确数为 19。
 
-除了书写习惯的差异外，部分输入还存在错误的多余笔划，而模型在尝试识别数字4和5时对错误的多余笔划尤其敏感，这与数字4和5的形状特征导致的。
+保留了上板调试确认的两项修复：
 
-![pictures/%E9%9A%BE%E4%BE%8B-%E5%A4%9A%E4%BD%99%E7%AC%94%E5%88%92.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/cb831740a41b4ea293c0d690ef7bc62a1d40b1e0/pictures/%E9%9A%BE%E4%BE%8B-%E5%A4%9A%E4%BD%99%E7%AC%94%E5%88%92.png)
-<br>图15. 存在错误多余笔划的难例<br><br>
+- `main.c` 显式逐字节清零统计结构、推理状态，并复位 Clock 变量，适配 CCS 重新 Go Main 的情况。
+- `C6416.cmd` 保留 `VECS=[0x00000000,0x00000400)`，普通代码和数据放入 `IRAM=[0x00000400,0x00030000)`。这里是本工程的链接区划分，不代表芯片的全部存储容量。
 
-要解决这个问题需要增强模型的泛化能力。可以在训练过程中进行数据增强，通过难例挖掘来加强对模型上述两个问题的适应性。但数据增强的效果是有限的，这受制于模型的参数规模，目前采用的模型参数规模太小，在不增大规模的情况下，很难大幅增强泛化能力，并且模型会存在无法收敛的风险。
-###  歪曲不正
-输入的数据中还有一部分，存在角度偏移的问题，特定的数字对角度偏移尤其敏感
- 
-![pictures/%E9%9A%BE%E4%BE%8B-%E8%A7%92%E5%BA%A6%E5%81%8F%E7%A7%BB.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/cb831740a41b4ea293c0d690ef7bc62a1d40b1e0/pictures/%E9%9A%BE%E4%BE%8B-%E8%A7%92%E5%BA%A6%E5%81%8F%E7%A7%BB.png)
-<br>图16. 由于角度偏移导致的难例<br><br>
+## 文件结构
 
-要解决这个问题可以从两个方面入手：
-* 其一是增强模型的泛化能力，但是这需要付出比较大的代价（训练步长与参数规模）；
-* 其二是在模型的颈部增加一个角度归一化模块，例如通过旋转将二值化判定为1的最高点和最低点在纵轴上对齐，裁去出框部分，空白部分补0。
-### 其他
+```text
+conv/          最终 CCS 工程、C/SA 内核、链接脚本和嵌入数据
+data/          原始权重及二值测试数据
+test_images/   默认 20 张测试样本的 PNG 和预览
+tools/         电脑端数据嵌入、样本可视化工具
+tests/         电脑端数值与调用路径验证
+reference/     仅供验证脚本使用的原始 C 数学对照
+```
 
-![pictures/%E9%9A%BE%E4%BE%8B-%E5%85%B6%E4%BB%96.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/cb831740a41b4ea293c0d690ef7bc62a1d40b1e0/pictures/%E9%9A%BE%E4%BE%8B-%E5%85%B6%E4%BB%96.png)
-<br>图17. 其他的一些难例<br><br>
+![默认 20 张测试样本](test_images/preview.png)
 
-其他的难例主要出现在68、179这两组中，初步分析可能是由于卷积核太大了，细节提取有些粗糙。将5*5的单层卷积核改为3*3的双层卷积核，也许可以改善这一问题。这样做也能减少参数数量，但是会增加运算量。
+PNG 用于查看测试样本，DSP 实际读取 `cnn_data.h` 中的 0/1 像素数组。当前版本没有直接在板上选择、读取或解码 PNG/JPG 的入口。
 
-## Deploy on C6416
+## 电脑端验证（可选）
 
-![pictures/load_int.png](https://github.com/ih8gin/Mnist-on-dsp-chip/blob/66835a75bd0e4e7678ef26673182db9ba4a1e44a/pictures/load_int.png)
-<br>图22. C6416部署结果
+需要 Python 3 和 clang，在仓库根目录执行：
 
+```sh
+python3 tests/verify_host.py
+python3 tests/verify_sa_semantics.py
+python3 tests/verify_call_route.py
+```
+
+验证覆盖原始 C 数学对照、500 张样本与 67 个边界输入、128 项点积语义，以及两种分支的初始化和真实主程序调用关系。宿主机上的汇编调用分支链接明确标注的 C 桩；`.sa` 语义脚本解释指令数据行为，**它们都不在 PC 上执行 C64x 机器码，也不能代替 TI 编译、COFF 链接和板卡实测**。细节见 [tests/README.md](tests/README.md)。
+
+如需更换默认嵌入样本，应重新生成数据及对应的正确性参考值，并同步调整固定样本回归预期：
+
+```sh
+python3 tools/embed_data.py --count 20 --offset 0
+python3 tests/generate_golden.py
+python3 tools/export_test_images.py --count 20 --offset 0
+```
+
+## 来源
+
+感谢原作者 [ih8gin](https://github.com/ih8gin) 提供 CNN、训练参数和数据。本仓库保留 Fork 关系，原项目的模型训练代码和历史说明可在上游查看；当前分支只保留最终 DSP 工程及其运行、验证所需文件。上游文件的来源与校验值见 [source_provenance.json](source_provenance.json)。

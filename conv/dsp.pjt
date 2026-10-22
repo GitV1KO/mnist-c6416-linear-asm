@@ -1,38 +1,37 @@
 ; Code Composer Project File, Version 2.0 (do not modify or remove this line)
 
 [Project Settings]
-ProjectDir="F:\DSP\dsp pro\SXT\OCR0107\"
+ProjectDir="."
 ProjectType=Executable
 CPUFamily=TMS320C64XX
 Tool="Compiler"
-Tool="CustomBuilder"
-Tool="DspBiosBuilder"
 Tool="Linker"
 Config="Debug"
 Config="Release"
 
 [Source Files]
 Source="C:\CCStudio_v3.1\C6000\cgtools\lib\rts6400.lib"
-Source="C:\CCStudio_v3.1\C6000\csl\lib\csl6416.lib"
-Source="C:\CCStudio_v3.1\c6400\dsplib\lib\dsp64x.lib"
 Source="main.c"
+Source="cnn.c"
+Source="cnn_dotprod128_c.c"
+Source="cnn_dotprod128.sa"
+Source="clock_demo.c"
 Source="C6416.cmd"
 
 ["Compiler" Settings: "Debug"]
-Options=-g -s -pdsw225 -fr"$(Proj_dir)\Debug" -i"C:\CCStudio_v3.3\c6400\imglib\include" -d"CHIP_6416" -mv6400
+Options=-g -o2 -k -s -i"." -i"C:\CCStudio_v3.1\C6000\cgtools\include" -fr"$(Proj_dir)\Debug" -fs"$(Proj_dir)\Debug" -d"CHIP_6416" -mv6400
 
 ["Compiler" Settings: "Release"]
-Options=-pdsw225 -o3 -fr"$(Proj_dir)\Release" -mv6400
+Options=-o3 -k -i"." -i"C:\CCStudio_v3.1\C6000\cgtools\include" -fr"$(Proj_dir)\Release" -fs"$(Proj_dir)\Release" -d"CHIP_6416" -mv6400
 
 ["Linker" Settings: "Debug"]
-Options=-c -heap800 -o".\Debug\Read_Bmp.out" -stack800 -w -x
+Options=-c -heap0x800 -stack0x2000 -m".\Debug\cnn_linear.map" -o".\Debug\cnn_linear.out" -w -x
 
 ["Linker" Settings: "Release"]
-Options=-c -m".\Release\Read_Bmp.map" -o".\Release\Read_Bmp.out" -w -x
+Options=-c -heap0x800 -stack0x2000 -m".\Release\cnn_linear.map" -o".\Release\cnn_linear.out" -w -x
 
 ["C6416.cmd" Settings: "Debug"]
 LinkOrder=1
 
 ["C6416.cmd" Settings: "Release"]
 LinkOrder=1
-

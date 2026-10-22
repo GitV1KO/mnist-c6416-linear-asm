@@ -1,0 +1,27 @@
+# macOS / Python
+.DS_Store
+__pycache__/
+*.pyc
+# CCS generated outputs
+*.obj
+*.out
+*.map
+*.asm
+*.lst
+*.nfo
+*.paf2
+*.sbl
+*.lkf
+*.log
+*.CS_/
+conv/Debug/*
+!conv/Debug/README.txt
+conv/Release/*
+!conv/Release/README.txt
+conv/build/
+# Personal notes and local archives
+*.doc
+*.docx
+*.heic
+*.HEIC
+*.zip

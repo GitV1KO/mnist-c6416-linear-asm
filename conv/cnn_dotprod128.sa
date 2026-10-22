@@ -1,0 +1,40 @@
+; TI C64x linear assembly, CCS 3.1 / C6000 COFF ABI, -mv6400.
+; int cnn_dotprod128(const short *x, const short *w);
+;
+; Exactly 128 signed 16-bit products. No products are skipped.
+; x % 32 == 0, w % 32 == 16; both are 8-byte aligned.
+; sum(abs(x[i]*w[i])) <= INT_MAX, including all partial accumulations.
+;
+; 32 iterations * 4 elements: LDDW loads four shorts from each buffer.
+; Two independent sums and opposite-side DOTP2 operands expose .M1/.M2
+; parallel work. The assembly optimizer handles latency and pipelining.
+; .mptr gives the actual L1D bank phase / 8-byte iteration stride.
+; This is C64x code: no SPLOOP, TSCL or C64x+-only instructions.
+
+        .sect   ".text"
+        .global _cnn_dotprod128
+
+_cnn_dotprod128: .cproc x, w
+        .rega   x, x_hi, x_lo, p0, sum0
+        .regb   w, w_hi, w_lo, p1, sum1
+        .reg    count, result
+        .mptr   x, bankbase+0, 8
+        .mptr   w, bankbase+16, 8
+
+        MVK     32, count
+        ZERO    sum0
+        ZERO    sum1
+
+dot_loop: .trip 32, 32
+        LDDW    *x++, x_hi:x_lo
+        LDDW    *w++, w_hi:w_lo
+        DOTP2   x_lo, w_lo, p0
+        DOTP2   w_hi, x_hi, p1
+        ADD     p0, sum0, sum0
+        ADD     p1, sum1, sum1
+        SUB     count, 1, count
+ [count] B       dot_loop
+
+        ADD     sum0, sum1, result
+        .return result
+        .endproc
