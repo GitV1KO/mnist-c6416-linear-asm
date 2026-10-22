@@ -1,6 +1,6 @@
-# MNIST CNN on C6416 with Linear Assembly
+# MNIST CNN on C6416 with Linear Assembly（HUST结课作业）
 
-在 **TMS320C6416 / C64x DSP** 上运行手写数字识别 CNN，并使用 TI 线性汇编加速第二层卷积中的点积计算。项目用于《嵌入式系统设计与实验》结课实验，已完成真实开发板运行和课程验收。
+在 **TMS320C6416 / C64x DSP** 上运行手写数字识别 CNN，并使用 TI 线性汇编加速第二层卷积中的点积计算。项目用于HUST电信专硕《嵌入式系统设计与实验》结课实验，已完成真实开发板运行和课程验收。
 
 本仓库基于 [ih8gin/Mnist-on-dsp-chip](https://github.com/ih8gin/Mnist-on-dsp-chip) 修改。网络结构、训练好的权重和原始 MNIST 测试数据来自原项目；本次工作主要是裸机推理整理、线性汇编内核优化、CCS 3.1 工程适配及公平的断点计时。没有重新训练模型。
 
